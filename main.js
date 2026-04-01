@@ -23,26 +23,22 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { HTMLMesh } from 'three/addons/interactive/HTMLMesh.js';
 import { InteractiveGroup } from 'three/addons/interactive/InteractiveGroup.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+import { sqrt } from 'three/tsl';
 
 let appName = 'SpiralFresnelFrenzy';
 let appDescription = 'the premier AR tool for simulating adaptive spiral Fresnel lenses';
 
-// relative angles of the components
-let deltaTheta1M1  = 10.0 * Math.PI / 180.0;
-let deltaTheta2M2 = 10.0 * Math.PI / 180.0;
-
-let qAFL1M1 = 1/(100*Math.PI/180.0);	// the ratio of focal power and the angle between the first two components (in radians)
-let qAFL2M2 = 1/(100*Math.PI/180.0);	// the ratio of focal power and the angle between the last two components (in radians)
-// does this really need to change?  Probably not...
-let qAFL = 1/(100*Math.PI/180.0);	// the ratio of focal power and the angle between the components (in radians)
-let deltaZMin = 0.00001;	// minimum separation of the components (in metres)
-//seems that not need to change
-//let deltaZ1M1User = deltaZMin;	// user-requested separation of the 1-M1 components (in metres)
-//let deltaZ2M2User = deltaZMin;	// user-requested separation of the 2-M2 components (in metres)
-//let deltaZ1M1 = deltaZMin; // separation of the 1-M1 components (in metres)
-//let deltaZ2M2 = deltaZMin; // separation of the 2-M2 components (in metres)
-let deltaZ = deltaZMin;	// separation of the outer componentsto inner commponents (in metres)
-let deltaM1M2 = 0.000001;	// separation of the M1-M2 components (in metres)
+let qAFL = 1/(100*Math.PI/180.0);	// the ratio of focal power and the angle between the two components (in radians)
+let fB = 0.035;	// non-focusing focal length parameter; still used by components 2 and 3
+let deltaTheta = 10.0*Math.PI/180.0;	// angle by which components are rotated relative to each other (in radians)
+let deltaTheta2 = 10.0*Math.PI/180.0;	// rotation angle between components 3 and 4 (in radians)
+let deltaZGap = 0.0;	// axial gap between the two SFL devices (metres)
+let b1 = 0.02;	// winding parameter for SFL #1
+let b2 = 0.02;	// winding parameter for SFL #2
+let deltaZMin = 0.00001;	// minimum separation of the two components (in metres)
+let deltaZUser = deltaZMin;	// user-requested separation of the two components (in metres)
+let deltaZ = deltaZMin; // separation of the two components (in metres)
+let deltaZ2 = deltaZMin; // separation of components 3 and 4 (in metres)
 let yXR = 1.5;
 let show = 0;	// 0 = both parts, 1 = part 1, 2 = part 2, 3 = equivalent lens, 4 = None
 let windingFocussing = 1;	// 0 = None, 1 = Alvarez, 2 = separation (works for log. spiral only!)
@@ -91,7 +87,7 @@ let info;	// = document.createElement('div');
 
 let gui;
 let GUIParams;
-let showControl, spiralTypeControl, windingFocussingControl, azimuthalPhaseCorrectionControl, RAPCControl, DeltaRAPCControl, deltaZControl, backgroundControl, autofocusControl, focusDistanceControl;
+let showControl, spiralTypeControl, windingFocussingControl, azimuthalPhaseCorrectionControl, RAPCControl, DeltaRAPCControl, deltaZControl, deltaZ2Control, backgroundControl, autofocusControl, focusDistanceControl;
 // let folderComponents, folderBackground, folderVirtualCamera;
 
 
@@ -306,140 +302,165 @@ function render() {
 // 	// raytracingSphereShaderMaterial.uniforms.randomNumbersX.value = randomNumbersX;
 // 	// raytracingSphereShaderMaterial.uniforms.randomNumbersY.value = randomNumbersY;
 // }
-
 function updateUniforms() {
-	let f1 = raytracingSphereShaderMaterial.uniforms.b.value/qAFL; 
-	// let P_eq = qAFL1M1 * deltaTheta1M1 + qAFL2M2 * deltaTheta2M2;	// equivalent focal power
-	//  f1 = 1.0 / P_eq;
-	let f2 = -0.5*f1;
-	raytracingSphereShaderMaterial.uniforms.f1.value = f1;
-	raytracingSphereShaderMaterial.uniforms.f2.value = f2;
+	// For two SFLs we compute fA and fB from b1 and b2 respectively, and map them onto 4 components:
+	//   component 1: +fA
+	//   component 2: -fB
+	//   component 3: -fB
+	//   component 4: +fA
 
+	const fA = b1 / qAFL;
+
+	raytracingSphereShaderMaterial.uniforms.f1.value = fA;
+	raytracingSphereShaderMaterial.uniforms.f2.value = -fB;
+	raytracingSphereShaderMaterial.uniforms.f3.value = -fB;
+	raytracingSphereShaderMaterial.uniforms.f4.value = fA;
+
+	raytracingSphereShaderMaterial.uniforms.b1.value = b1;
+	raytracingSphereShaderMaterial.uniforms.b2.value = b2;
+
+	// visibility / display modes
 	switch(show) {
-	case 1:	// part 1
+	case 1: // part 1 only
 		raytracingSphereShaderMaterial.uniforms.visible1.value = true;
-		raytracingSphereShaderMaterial.uniforms.visible2.value = false;
-		raytracingSphereShaderMaterial.uniforms.showEquivalentLens.value = false;
-		break;
-	case 2:	// part 2
-		raytracingSphereShaderMaterial.uniforms.visible1.value = false;
 		raytracingSphereShaderMaterial.uniforms.visible2.value = true;
+		raytracingSphereShaderMaterial.uniforms.visible3.value = false;
+		raytracingSphereShaderMaterial.uniforms.visible4.value = false;
 		raytracingSphereShaderMaterial.uniforms.showEquivalentLens.value = false;
 		break;
-	case 3:	// equivalent ideal lens
+	case 2: // part 2 only
 		raytracingSphereShaderMaterial.uniforms.visible1.value = false;
 		raytracingSphereShaderMaterial.uniforms.visible2.value = false;
+		raytracingSphereShaderMaterial.uniforms.visible3.value = true;
+		raytracingSphereShaderMaterial.uniforms.visible4.value = true;
+		raytracingSphereShaderMaterial.uniforms.showEquivalentLens.value = false;
+		break;
+	case 3: // equivalent ideal lens
+		raytracingSphereShaderMaterial.uniforms.visible1.value = false;
+		raytracingSphereShaderMaterial.uniforms.visible2.value = false;
+		raytracingSphereShaderMaterial.uniforms.visible3.value = false;
+		raytracingSphereShaderMaterial.uniforms.visible4.value = false;
 		raytracingSphereShaderMaterial.uniforms.showEquivalentLens.value = true;
 		raytracingSphereShaderMaterial.uniforms.equivalentLensIdeal.value = true;
 		break;
-	case 4:	// equivalent lens hologram
+	case 4: // equivalent lens hologram
 		raytracingSphereShaderMaterial.uniforms.visible1.value = false;
 		raytracingSphereShaderMaterial.uniforms.visible2.value = false;
+		raytracingSphereShaderMaterial.uniforms.visible3.value = false;
+		raytracingSphereShaderMaterial.uniforms.visible4.value = false;
 		raytracingSphereShaderMaterial.uniforms.showEquivalentLens.value = true;
 		raytracingSphereShaderMaterial.uniforms.equivalentLensIdeal.value = false;
 		break;
-	case 5:	// none
+	case 5: // none
 		raytracingSphereShaderMaterial.uniforms.visible1.value = false;
 		raytracingSphereShaderMaterial.uniforms.visible2.value = false;
+		raytracingSphereShaderMaterial.uniforms.visible3.value = false;
+		raytracingSphereShaderMaterial.uniforms.visible4.value = false;
 		raytracingSphereShaderMaterial.uniforms.showEquivalentLens.value = false;
 		break;
-	case 0:	// both parts
+	case 0: // all parts
 	default:
 		raytracingSphereShaderMaterial.uniforms.visible1.value = true;
-		raytracingSphereShaderMaterial.uniforms.visibleM1.value = true;
-		raytracingSphereShaderMaterial.uniforms.visibleM2.value = true;
 		raytracingSphereShaderMaterial.uniforms.visible2.value = true;
+		raytracingSphereShaderMaterial.uniforms.visible3.value = true;
+		raytracingSphereShaderMaterial.uniforms.visible4.value = true;
 		raytracingSphereShaderMaterial.uniforms.showEquivalentLens.value = false;
 	}
 
+	// winding focusing mode
 	switch(windingFocussing) {
-	case 0:	// None
+	case 0: // None
 		raytracingSphereShaderMaterial.uniforms.alvarezWindingFocusing.value = false;
 		break;
-	case 2:	// separation
+	case 2: // separation
 		raytracingSphereShaderMaterial.uniforms.alvarezWindingFocusing.value = false;
+		// separation-based winding focusing only supported for logarithmic spiral; keep legacy behaviour
 		if(raytracingSphereShaderMaterial.uniforms.cylindricalLensSpiralType.value === 0) {
-			// the spiral type is logarithmic, which is the only type for which separation-based winding focussing works
-			if(deltaTheta >= 0) {
-				// deltaTheta >= 0, which is the other condition for separation-based winding focussing to work
-				deltaZ = f1*f1/calculateEquivalentLensF();
+			if(deltaTheta != 0) {
+
+				deltaZ = fA + 0.5 * ((2 - b1 * deltaTheta + b2 * deltaTheta2) * fB - Math.sqrt((b1 * deltaTheta - b2 * deltaTheta2) * fB * (-2 * fA + (-2 + b1 * deltaTheta - b2 * deltaTheta2) * fB)));
+				deltaZ2 = 0.5*(2*fA+(2-b1*deltaTheta+b2*deltaTheta2)*fB+Math.sqrt((b1*deltaTheta-b2*deltaTheta2)*fB*(-2*fA+(-2+b1*deltaTheta-b2*deltaTheta2)*fB)));
 				windingFocussingControl.domElement.style.color = "#FFFFFF";
 			} else {
-				// deltaTheta < 0; separation-based winding focussing doesn't work here
 				deltaZ = deltaZMin;
+				deltaZ2 = deltaZMin;
 				windingFocussingControl.domElement.style.color = "#FF0000";
 			}
 			deltaZControl.setValue(deltaZ);
+			deltaZ2Control.setValue(deltaZ2);
 		} else {
 			windingFocussingControl.domElement.style.color = "#FF0000";
 		}
-		break;		
-	case 1:	// Alvarez
+		break;
+	case 1: // Alvarez
 	default:
 		raytracingSphereShaderMaterial.uniforms.alvarezWindingFocusing.value = true;
 	}
 
+	// azimuthal phase correction
 	switch(azimuthalPhaseCorrection) {
-		case 0:	// Off
+		case 0:
 			raytracingSphereShaderMaterial.uniforms.azimuthalPhaseCorrection.value = false;
 			break;
-		case 2: // On (for R < RAPC - DeltaRAPC/2; partially for R between RAPC - DeltaRAPC/2 and RAPC + DeltaRAPC/2)
+		case 2:
 			raytracingSphereShaderMaterial.uniforms.azimuthalPhaseCorrection.value = true;
-			raytracingSphereShaderMaterial.uniforms.RAPC0.value = RAPC + 0.5*DeltaRAPC;	// RAPC + DeltaRAPC/2
-			raytracingSphereShaderMaterial.uniforms.RAPC1.value = RAPC - 0.5*DeltaRAPC;	// RAPC - DeltaRAPC/2
+			raytracingSphereShaderMaterial.uniforms.RAPC0.value = RAPC + 0.5*DeltaRAPC;
+			raytracingSphereShaderMaterial.uniforms.RAPC1.value = RAPC - 0.5*DeltaRAPC;
 			break;
-		case 1:	// On
+		case 1:
 		default:
 			raytracingSphereShaderMaterial.uniforms.azimuthalPhaseCorrection.value = true;
-			raytracingSphereShaderMaterial.uniforms.RAPC1.value = Infinity;	// azimuthal phase correction for all radii
+			raytracingSphereShaderMaterial.uniforms.RAPC1.value = Infinity;
 	}
 
-	raytracingSphereShaderMaterial.uniforms.phi1.value = 0;	// -0.5*deltaTheta;
-	raytracingSphereShaderMaterial.uniforms.phiM1.value = deltaTheta1M1;	// +0.5*deltaTheta;
-	raytracingSphereShaderMaterial.uniforms.phiM2.value = deltaTheta2M2;	// +0.5*deltaTheta;
-	raytracingSphereShaderMaterial.uniforms.phi2.value = 0;	// -0.5*deltaTheta;
+	// rotations (use explicit deltaTheta variables; do not derive them from other angles)
+	raytracingSphereShaderMaterial.uniforms.phi1.value = deltaTheta;
+	raytracingSphereShaderMaterial.uniforms.phi2.value = 0.0;
+	raytracingSphereShaderMaterial.uniforms.phi3.value = 0.0;
+	raytracingSphereShaderMaterial.uniforms.phi4.value = deltaTheta2;
 
-	// arrange them symmetrically around z=0
-	deltaZ = f1+f2;
-	raytracingSphereShaderMaterial.uniforms.c1.value.z = -deltaZ;
-	raytracingSphereShaderMaterial.uniforms.c2.value.z = deltaZ;
-	raytracingSphereShaderMaterial.uniforms.cM1.value.z = -0.5*deltaM1M2;
-	raytracingSphereShaderMaterial.uniforms.cM2.value.z = 0.5*deltaM1M2;
+	// axial placement: two SFLs arranged symmetrically about z=0 with a configurable gap between them.
+	// SFL #1 uses components (1,2) separated by deltaZ; SFL #2 uses (3,4) separated by deltaZ.
+	const zMid1 = +0.5*deltaZGap;
+	const zMid2 = -0.5*deltaZGap;
+	const dz12 = deltaZ;
+	const dz34 = deltaZ2;
 
+	raytracingSphereShaderMaterial.uniforms.c1.value.z = zMid1 + 0.5*dz12;
+	raytracingSphereShaderMaterial.uniforms.c2.value.z = zMid1 ;
+	raytracingSphereShaderMaterial.uniforms.c3.value.z = zMid2 ;
+	raytracingSphereShaderMaterial.uniforms.c4.value.z = zMid2 - 0.5*dz34;
 
 	// if we are in vr mode, move the lenses up
 	if(renderer.xr.enabled && renderer.xr.isPresenting) {
 		raytracingSphereShaderMaterial.uniforms.c1.value.y = yXR;
 		raytracingSphereShaderMaterial.uniforms.c2.value.y = yXR;
-		raytracingSphereShaderMaterial.uniforms.cM1.value.y = yXR;
-		raytracingSphereShaderMaterial.uniforms.cM2.value.y = yXR;
+		raytracingSphereShaderMaterial.uniforms.c3.value.y = yXR;
+		raytracingSphereShaderMaterial.uniforms.c4.value.y = yXR;
 	}
 
-	let b2pi = raytracingSphereShaderMaterial.uniforms.b.value*2.0*Math.PI;
-	raytracingSphereShaderMaterial.uniforms.b2pi.value = b2pi;
-	raytracingSphereShaderMaterial.uniforms.nHalf.value = Math.log(0.5*(1. + Math.exp(b2pi)))/b2pi;
+	// equivalent lens focal length (simple effective model)
+	raytracingSphereShaderMaterial.uniforms.equivalentLensF.value = calculateEquivalentLensF();
 
-	let equivalentLensF = calculateEquivalentLensF();
-	raytracingSphereShaderMaterial.uniforms.equivalentLensF.value = equivalentLensF;
-
+	// background / camera uniforms (legacy) 
 	let aspectRatioBackground;
 	switch(background) {
-	case 0:	// device camera(s)
+	case 0:
 		raytracingSphereShaderMaterial.uniforms.backgroundTexture.value = videoFeedETexture;
 		aspectRatioBackground = aspectRatioVideoFeedE;
-		raytracingSphereShaderMaterial.uniforms.backgroundColour.value = new THREE.Vector4(0, 0, 0, 1);	// black
+		raytracingSphereShaderMaterial.uniforms.backgroundColour.value = new THREE.Vector4(0, 0, 0, 1);
 		break;
-	case 1:	// TIM	// Earthrise
-		raytracingSphereShaderMaterial.uniforms.backgroundTexture.value = textureTIM;	// Earthrise;
-		aspectRatioBackground = aspectRatioTIM;	// Earthrise;
-		raytracingSphereShaderMaterial.uniforms.backgroundColour.value = backgroundColourTIM;	// Earthrise;
+	case 1:
+		raytracingSphereShaderMaterial.uniforms.backgroundTexture.value = textureTIM;
+		aspectRatioBackground = aspectRatioTIM;
+		raytracingSphereShaderMaterial.uniforms.backgroundColour.value = backgroundColourTIM;
 		break;
-	case 2:	// Aldrin
+	case 2:
 		raytracingSphereShaderMaterial.uniforms.backgroundTexture.value = textureAldrin;
 		aspectRatioBackground = aspectRatioAldrin;
 		raytracingSphereShaderMaterial.uniforms.backgroundColour.value = backgroundColourAldrin;
 		break;
-	// case 3:	// pillars of creation
+// case 3:	// pillars of creation
 	// 	raytracingSphereShaderMaterial.uniforms.backgroundTexture.value = texturePillars;
 	// 	aspectRatioBackground = aspectRatioPillars;	
 	// 	raytracingSphereShaderMaterial.uniforms.backgroundColour.value = backgroundColourPillars;
@@ -449,18 +470,20 @@ function updateUniforms() {
 	// 	aspectRatioBackground = aspectRatioLunch;
 	// 	raytracingSphereShaderMaterial.uniforms.backgroundColour.value = backgroundColourLunch;
 	// 	break;
-	case 3:	// Half Dome
+	case 3: // Half Dome
+	default:
 		raytracingSphereShaderMaterial.uniforms.backgroundTexture.value = textureHalfDome;
 		aspectRatioBackground = aspectRatioHalfDome;
 		raytracingSphereShaderMaterial.uniforms.backgroundColour.value = backgroundColourHalfDome;
-	// 	break;
+		// 	break;
 	// case 6:	// Blue marble
 	// 	raytracingSphereShaderMaterial.uniforms.backgroundTexture.value = textureBlueMarble;
 	// 	aspectRatioBackground = aspectRatioBlueMarble;
 	// 	raytracingSphereShaderMaterial.uniforms.backgroundColour.value = backgroundColourBlueMarble;
 	}
 
-	// the tangents for the environment-facing camera video feed
+		// the tangents for the environment-facing camera video feed
+
 	let tanHalfFovHBackground, tanHalfFovVBackground;
 	if(aspectRatioBackground > 1.0) {
 		// horizontal orientation
@@ -502,133 +525,8 @@ function updateUniforms() {
 	}
 	raytracingSphereShaderMaterial.uniforms.halfWidthU.value = raytracingSphereShaderMaterial.uniforms.videoDistance.value*tanHalfFovHU;
 	raytracingSphereShaderMaterial.uniforms.halfHeightU.value = raytracingSphereShaderMaterial.uniforms.videoDistance.value*tanHalfFovVU;
-
-	// create the points on the aperture
-
-	// create basis vectors for the camera's clear aperture
-	let viewDirection = new THREE.Vector3();
-	let apertureBasisVector1 = new THREE.Vector3();
-	let apertureBasisVector2 = new THREE.Vector3();
-	// are we in VR mode?
-	if(renderer.xr.enabled && renderer.xr.isPresenting) {
-		viewDirection.copy(new THREE.Vector3(0, 0, -1));
-	} else {
-		camera.getWorldDirection(viewDirection);
-		viewDirection.normalize();
-	}
-	// postStatus(`viewDirection.lengthSq() = ${viewDirection.lengthSq()}`);
-	// if(counter < 10) console.log(`viewDirection = (${viewDirection.x.toPrecision(2)}, ${viewDirection.y.toPrecision(2)}, ${viewDirection.z.toPrecision(2)})`);
-
-	if((viewDirection.x == 0.0) && (viewDirection.y == 0.0)) {
-		// viewDirection is along z direction
-		apertureBasisVector1.crossVectors(viewDirection, new THREE.Vector3(1, 0, 0)).normalize();
-	} else {
-		// viewDirection is not along z direction
-		apertureBasisVector1.crossVectors(viewDirection, new THREE.Vector3(0, 0, 1)).normalize();
-	}
-	apertureBasisVector1.crossVectors(THREE.Object3D.DEFAULT_UP, viewDirection).normalize();
-	// viewDirection = new THREE.Vector3(0, 0, -1);
-	// apertureBasisVector1 = new THREE.Vector3(1, 0, 0);
-	apertureBasisVector2.crossVectors(viewDirection, apertureBasisVector1).normalize();
-
-	let backgroundCentre = new THREE.Vector3(0, 0, 0);
-	// are we in VR mode?
-	// if(renderer.xr.enabled && renderer.xr.isPresenting) {
-	// backgroundCentre.copy(new THREE.Vector3(0, yXR, -raytracingSphereShaderMaterial.uniforms.videoDistance.value));
-	// } else {	
-	backgroundCentre.copy(camera.position);
-	backgroundCentre.addScaledVector(viewDirection, raytracingSphereShaderMaterial.uniforms.videoDistance.value);
-	// }
-	// postStatus(`backgroundCentre=(${backgroundCentre.x}, ${backgroundCentre.y}, ${backgroundCentre.z})`);
-	// apertureBasis1 *= apertureRadius;
-	// apertureBasis2 *= apertureRadius;
-
-	// if(counter < 10) console.log(`apertureBasisVector1 = (${apertureBasisVector1.x.toPrecision(2)}, ${apertureBasisVector1.y.toPrecision(2)}, ${apertureBasisVector1.z.toPrecision(2)})`);
-	// if(counter < 10) console.log(`apertureBasisVector2 = (${apertureBasisVector2.x.toPrecision(2)}, ${apertureBasisVector2.y.toPrecision(2)}, ${apertureBasisVector2.z.toPrecision(2)})`);
-	// counter++;
-
-	// create random points on the (circular) aperture
-	// let i=0;
-	// pointsOnAperture = [];	// clear the array containing points on the aperture
-	// do {
-	// 	// create a new random point on the camera's clear aperture
-	// 	let x = 2*Math.random()-1;	// random number between -1 and 1
-	// 	let y = 2*Math.random()-1;	// random number between -1 and 1
-	// 	if(x*x + y*y <= 1) {
-	// 		// (x,y) lies within a circle of radius 1
-	// 		//  add a new point to the array of points on the aperture
-	// 		pointsOnAperture.push(apertureRadius*x*apertureBasis1 + apertureRadius*y*apertureBasis2);
-	// 		i++;
-	// 	}
-	// } while (i < noOfRays);
-	raytracingSphereShaderMaterial.uniforms.noOfRays.value = noOfRays;
-	raytracingSphereShaderMaterial.uniforms.apertureXHat.value.copy(apertureBasisVector1);
-	raytracingSphereShaderMaterial.uniforms.apertureYHat.value.copy(apertureBasisVector2);
-	raytracingSphereShaderMaterial.uniforms.viewDirection.value.copy(viewDirection);
-	raytracingSphereShaderMaterial.uniforms.backgroundCentre.value.copy(backgroundCentre);
-	// raytracingSphereShaderMaterial.uniforms.apertureXHat.value.x = apertureRadius*apertureBasisVector1.x;
-	// raytracingSphereShaderMaterial.uniforms.apertureXHat.value.y = apertureRadius*apertureBasisVector1.y;
-	// raytracingSphereShaderMaterial.uniforms.apertureXHat.value.z = apertureRadius*apertureBasisVector1.z;
-	// raytracingSphereShaderMaterial.uniforms.apertureYHat.value.x = apertureRadius*apertureBasisVector2.x;
-	// raytracingSphereShaderMaterial.uniforms.apertureYHat.value.y = apertureRadius*apertureBasisVector2.y;
-	// raytracingSphereShaderMaterial.uniforms.apertureYHat.value.z = apertureRadius*apertureBasisVector2.z;
-	// raytracingSphereShaderMaterial.uniforms.pointsOnAperture.value = pointsOnAperture;
-	raytracingSphereShaderMaterial.uniforms.apertureRadius.value = apertureRadius;
-
-	let focusDistance;
-	if(autofocus) {
-		let sign = Math.sign(viewDirection.z);
-
-		// calculate the "object distance" of the z plane containing the background centre
-		let o = sign*backgroundCentre.z;
-
-		// calculate "image distance" of the z plane containing the image of the background centre
-		// let i = o*equivalentLensF/(o-equivalentLensF);
-
-		// calculate the magnification of the image of the background centre, which is -(image distance)/(object distance)
-		let m;
-		if(equivalentLensF === Infinity) m = 1;
-		else m = equivalentLensF/(equivalentLensF - o);
-
-		// calculate the image of the background centre, making good use of the fact that the principal point of the lens is at the origin
-		let backgroundCentreImage = backgroundCentre.multiplyScalar(m);
-
-		// calculate the focus distance
-		let cp2bcPrime = new THREE.Vector3(0, 0, 0);	// the vector from the camera centre to the image of the background centre
-		cp2bcPrime.copy(backgroundCentreImage);
-		cp2bcPrime.addScaledVector(camera.position, -1);
-	
-		focusDistance = cp2bcPrime.dot(viewDirection);
-		// postStatus(`focusDistance = ${focusDistance}`);
-		atanFocusDistance = Math.atan(focusDistance);
-	} else {
-		focusDistance = Math.tan(atanFocusDistance);
-	}
-	if(raytracingSphereShaderMaterial.uniforms.focusDistance.value != focusDistance) {
-		raytracingSphereShaderMaterial.uniforms.focusDistance.value = focusDistance;
-		// GUIParams.'tan<sup>-1</sup>(focus. dist.)'.value = atanFocusDistance;
-		focusDistanceControl.setValue(atanFocusDistance);
-	}
-
-	// (re)create random numbers
-	// let i=0;
-	// let randomNumbersX = [];
-	// let randomNumbersY = [];
-	// do {
-	// 	// create a new pairs or random numbers (x, y) such that x^2 + y^2 <= 1
-	// 	let x = 2*Math.random()-1;	// random number between -1 and 1
-	// 	let y = 2*Math.random()-1;	// random number between -1 and 1
-	// 	if(x*x + y*y <= 1) {
-	// 		// (x,y) lies within a circle of radius 1
-	// 		//  add a new point to the array of points on the aperture
-	// 		randomNumbersX.push(apertureRadius*x);
-	// 		randomNumbersY.push(apertureRadius*y);
-	// 		i++;
-	// 	}
-	// } while (i < 100);
-	// raytracingSphereShaderMaterial.uniforms.randomNumbersX.value = randomNumbersX;
-	// raytracingSphereShaderMaterial.uniforms.randomNumbersY.value = randomNumbersY;
 }
+
 
 /** create raytracing phere */
 function addRaytracingSphere() {
@@ -665,40 +563,36 @@ function addRaytracingSphere() {
 		side: THREE.DoubleSide,
 		// wireframe: true,
 		uniforms: {
-			cylindricalLensSpiralType: { value: 0 },	// 0 = logarithmic, 1 = Archimedean, 2 = hyperbolic r=1/(-b psi)
+			cylindricalLensSpiralType: { value: 0 },	// 0 = logarithmic, 1 = Archimedean, 2 = hyperbolic
 			radius: { value: 1.0 },	// radius of the Fresnel lens
+			// four components (two SFL devices)
 			visible1: { value: true },
-			c1: { value: new THREE.Vector3(0, 0, 0) },	// centre of part 1
-			phi1: { value: 0 },	// angle by which component 1 is rotated around the z axis, in radians
-
-			f2: { value: -0.05 }, // focal length of cylindrical lens at r=1 for component M
-
-			visibleM1: { value: true },
-			cM1: { value: new THREE.Vector3(0, 0, 0) }, // centre of the middle component2
-			phiM1: { value: 0 }, // angle by which the middle component is rotated around the z axis, in radians
-
-			visibleM2: { value: true },
-			cM2: { value: new THREE.Vector3(0, 0, 0) }, // centre of the middle component2
-			phiM2: { value: 0 }, // angle by which the middle component is rotated around the z axis, in radians
-
-			visible2: { value: true }, // true if component 2 is visible, false otherwise
-			c2: { value: new THREE.Vector3(0, 0, 0) },	// centre of part 2
-			phi2: { value: 0 },	// angle by which component 2 is rotated around the z axis, in radians
-
-			f2: { value: -0.05 }, // focal length of cylindrical lens at r=1 for component M
-			f1: { value: 0.1 },	// focal length of cylindrical lens at r=1
-			b: { value: 0.02 },	// winding parameter of the spiral
-			b2pi: { value: 0 },	// b*2 pi; pre-calculated in updateUniforms()
-			nHalf: { value: 0 },	// pre-calculated in updateUniforms()
+			c1: { value: new THREE.Vector3(0, 0, 0) },
+			phi1: { value: 0 },
+			f1: { value: 0.1 },
+			b1: { value: 0.02 },	// winding parameter for SFL #1
+			visible2: { value: true },
+			c2: { value: new THREE.Vector3(0, 0, 0) },
+			phi2: { value: 0 },
+			f2: { value: -0.1 },
+			visible3: { value: true },
+			c3: { value: new THREE.Vector3(0, 0, 0) },
+			phi3: { value: 0 },
+			f3: { value: -0.1 },
+			b2: { value: 0.02 },	// winding parameter for SFL #2
+			visible4: { value: true },
+			c4: { value: new THREE.Vector3(0, 0, 0) },
+			phi4: { value: 0 },
+			f4: { value: 0.1 },
 			alvarezWindingFocusing: { value: windingFocussing == 1 },
-			azimuthalPhaseCorrection: { value: azimuthalPhaseCorrection != 0 },	// true if azimuthal phase correction is on, false otherwise
-			RAPC0: { value: RAPC + 0.5*DeltaRAPC },	// if azimuthalPhaseCorrection == 2, this is the radius above which the azimuthal phase correction is turned off
+			azimuthalPhaseCorrection: { value: azimuthalPhaseCorrection != 0 },
+			RAPC0: { value: RAPC + 0.5*DeltaRAPC },
 			RAPC1: { value: (azimuthalPhaseCorrection == 2)?RAPC - 0.5*DeltaRAPC:Infinity },
 			showEquivalentLens: { value: false },
 			equivalentLensIdeal: { value: true },
 			equivalentLensF: { value: 1e10 },
-			videoFeedUTexture: { value: videoFeedUTexture }, 
-			videoFeedETexture: { value: videoFeedETexture }, 
+			videoFeedUTexture: { value: videoFeedUTexture },
+			videoFeedETexture: { value: videoFeedETexture },
 			backgroundTexture: { value: textureEarthrise },
 			backgroundColour: { value: new THREE.Vector4(0, 0, 0, 1) },
 			halfWidthU: { value: 1.0 },
@@ -707,7 +601,7 @@ function addRaytracingSphere() {
 			halfHeightE: { value: 1.0 },
 			halfWidthBackground: { value: 1.0 },
 			halfHeightBackground: { value: 1.0 },
-			videoDistance: { value: 3e8 },	// distance of the image of the video feed from the origin
+			videoDistance: { value: 3e8 },// distance of the image of the video feed from the origin
 			focusDistance: { value: 10.0 },
 			apertureXHat: { value: new THREE.Vector3(1, 0, 0) },
 			apertureYHat: { value: new THREE.Vector3(0, 1, 0) },
@@ -739,28 +633,24 @@ function addRaytracingSphere() {
 			
 			uniform int cylindricalLensSpiralType;	// 0 = logarithmic, 1 = Archimedean, 2 = hyperbolic r=-b/psi
 			uniform float radius;	// radius of the Fresnel lens
-
-			uniform bool visible1;	// true if component 1 is visible, false otherwise
-			uniform vec3 c1;	// centre of component 1
-			uniform float phi1;	// angle by which component 1 is rotated (in radians)
-
-			uniform bool visibleM1;      // true if component M1 is visible
-			uniform vec3 cM1;            // centre of component M1
-			uniform float phiM1;         // rotation angle of component M1 (usually 0)
-
-			uniform bool visibleM2;      // true if component M2 is visible
-			uniform vec3 cM2;            // centre of component M2
-			uniform float phiM2;         // rotation angle of component M2 (usually 0)
-
-			uniform bool visible2;	// true if component 2 is visible, false otherwise
-			uniform vec3 c2;	// centre of component 2
-			uniform float phi2;	// angle by which component 2 is rotated (in radians)
-
-			uniform float f1;	// focal length of cylindrical lens at r=1
-			uniform float f2;	// focal length of cylindrical lens at r=1 for component M
-			uniform float b;	// winding parameter of the spiral
-			uniform float b2pi;	// pre-calculated
-			uniform float nHalf;	// pre-calculated
+			uniform bool visible1;	// component 1 visibility
+			uniform vec3 c1;			// centre of component 1
+			uniform float phi1;
+			uniform float f1;			// focal length parameter for component 1
+			uniform bool visible2;
+			uniform vec3 c2;
+			uniform float phi2;
+			uniform float f2;
+			uniform bool visible3;
+			uniform vec3 c3;
+			uniform float phi3;
+			uniform float f3;
+			uniform bool visible4;
+			uniform vec3 c4;
+			uniform float phi4;
+			uniform float f4;
+			uniform float b1;			// spiral winding parameter for components using b1
+			uniform float b2;			// spiral winding parameter for components using b2
 			uniform bool alvarezWindingFocusing;
 			uniform bool azimuthalPhaseCorrection;
 			uniform float RAPC0;	// if azimuthalPhaseCorrection == 2, this is the radius above which the azimuthal phase correction is turned off
@@ -768,7 +658,6 @@ function addRaytracingSphere() {
 			uniform bool showEquivalentLens;
 			uniform bool equivalentLensIdeal;	// true if the equivalent lens is an ideal thin lens, false if it is a lens hologram
 			uniform float equivalentLensF;
-
 
 			// video feed from user-facing camera
 			uniform sampler2D videoFeedUTexture;
@@ -868,7 +757,7 @@ function addRaytracingSphere() {
 			void passThroughLens(
 				inout vec3 p, 
 				inout vec3 d, 
-				inout vec4 b,
+				inout vec4 br,
 				vec3 centreOfLens, 
 				float radius,
 				float focalLength,
@@ -890,23 +779,22 @@ function addRaytracingSphere() {
 						lensDeflect(d, pixy, focalLength, idealLens);
 
 						// lower the brightness factor, giving the light a blue tinge
-						b *= vec4(0.9, 0.9, 0.99, 1);
+						br *= vec4(0.9, 0.9, 0.99, 1);
 					} 
 				}
 			}
 
 			// calculate the number of the winding that corresponds to position (r, phi)
-			float calculateN(float r, float phi) {
-				switch(cylindricalLensSpiralType)
-				{
-				case 1:	// ARCHIMEDEAN
-					// return floor(((r - b*phi)/b2pi) + 0.5);
-					return floor(0.5 + (r - b*phi) / b2pi);
-				case 2:	// hyperbolic
-					return floor(0.5 + (-1.0/(r*b) - phi)/(2.0*PI));
-				case 0:	// LOGARITHMIC
+			float calculateN(float r, float phi, float bLocal) {
+				float b2piLocal = bLocal*2.0*PI;
+				switch(cylindricalLensSpiralType) {
+				case 1: // ARCHIMEDEAN
+					return floor(0.5 + (r - bLocal*phi) / b2piLocal);
+				case 2: // HYPERBOLIC r = 1/(-b*psi)
+					return floor(0.5 + (-1.0/(r*bLocal) - phi) / (2.0*PI));
+				case 0: // LOGARITHMIC
 				default:
-					return floor(((log(r) - b*phi)/b2pi) + 0.5);
+					return floor(0.5 + (log(r) - bLocal*phi) / b2piLocal);
 				}
 			}
 
@@ -929,11 +817,11 @@ function addRaytracingSphere() {
 			// The spiral is rotated by deltaTheta.
 			// r2 is the square of r, which we need to calculate r and which we have already calculated, so we might
 			// as well pass it.
-			vec2 calculatePhaseGradient(float x, float y, float r2, float f1) {
+			vec2 calculatePhaseGradient(float x, float y, float r2, float f1, float bLocal) {
 				// calculate r and phi, the polar coordinates
 				float r = sqrt(r2);
 				float phi = atan(y, x);	// azimuthal angle, bound to the range [-pi, pi]
-				float n = calculateN(r, phi);	// the number of the winding the position (x, y) is on
+				float n = calculateN(r, phi, bLocal);	// the number of the winding the position (x, y) is on
 				float psi = phi + n*2.0*PI;	// (unbound) azimuthal angle psi
 
 				float c;	// common factor
@@ -941,22 +829,22 @@ function addRaytracingSphere() {
 				switch(cylindricalLensSpiralType)
 				{
 				case 1:	// ARCHIMEDEAN
-					c = b*(r-b*psi)/(2.0*f1*r2);
+					c = bLocal*(r-bLocal*psi)/(2.0*f1*r2);
 					v = vec2(
-						c*(-3.0*b*y*psi + r*(y-2.0*x*psi)),
-						c*( 3.0*b*x*psi - r*(x+2.0*y*psi))
+						c*(-3.0*bLocal*y*psi + r*(y-2.0*x*psi)),
+						c*( 3.0*bLocal*x*psi - r*(x+2.0*y*psi))
 					);
 
 					if(alvarezWindingFocusing) {
-						c = (r-b*psi)*(r-b*psi)/(f1*r2);
+						c = (r-bLocal*psi)*(r-bLocal*psi)/(f1*r2);
 						v += vec2(
-							c*(-r*x - b*y),
-							c*(-r*y + b*x)
+							c*(-r*x - bLocal*y),
+							c*(-r*y + bLocal*x)
 						);
 					}
 
 					if(azimuthalPhaseCorrection) {
-						c = calculateAPCFactor(b*psi) * b*b*b*psi*psi / (2.0*f1*r2);
+						c = calculateAPCFactor(bLocal*psi) * bLocal*bLocal*bLocal*psi*psi / (2.0*f1*r2);
 						v += vec2(
 							-c*y,
 							+c*x
@@ -968,14 +856,14 @@ function addRaytracingSphere() {
 					// if(alvarezWindingFocusing) {
 					// 	if(azimuthalPhaseCorrection) {
 					// 		return vec2(
-					// 			-(2.0*r*x + b*(y-2.0*x*psi)) / (2.0*f1),
-					// 			-(2.0*r*y - b*(x+2.0*y*psi)) / (2.0*f1)
+					// 			-(2.0*r*x + bLocal*(y-2.0*x*psi)) / (2.0*f1),
+					// 			-(2.0*r*y - bLocal*(x+2.0*y*psi)) / (2.0*f1)
 					// 		);
 					// 	} else {
-					// 		c = (r - b*psi) / (2.0*f1*r2);
+					// 		c = (r - bLocal*psi) / (2.0*f1*r2);
 					// 		return vec2(
-					// 			-c*(b*r*y + 2.0*r2*x + b*b*y*psi),
-					// 			+c*(b*r*x - 2.0*r2*y + b*b*x*psi)
+					// 			-c*(bLocal*r*y + 2.0*r2*x + bLocal*bLocal*y*psi),
+					// 			+c*(bLocal*r*x - 2.0*r2*y + bLocal*bLocal*x*psi)
 					// 		);
 					// 	}
 					// } else {
@@ -983,27 +871,27 @@ function addRaytracingSphere() {
 					// 	if(azimuthalPhaseCorrection) {
 					// 		c = b / (2.0*f1*r2);
 					// 		return vec2(
-					// 			c*(r2*y - 2.0*r*(r*x+2.0*b*y)*psi + 2.0*b*(r*x+b*y)*psi*psi),
-					// 			c*(-2.0*b*b*x*psi*psi - 2.0*b*r*psi*(2.0*x+y*psi) + r2*(x+2.0*y*psi))
+					// 			c*(r2*y - 2.0*r*(r*x+2.0*bLocal*y)*psi + 2.0*bLocal*(r*x+bLocal*y)*psi*psi),
+					// 			c*(-2.0*bLocal*bLocal*x*psi*psi - 2.0*bLocal*r*psi*(2.0*x+y*psi) + r2*(x+2.0*y*psi))
 					// 		);
 					// 	} else {
-					// 		c = (r - b*psi) / (2.0*f1*r2);
+					// 		c = (r - bLocal*psi) / (2.0*f1*r2);
 					// 		return vec2(
-					// 			+c*b*(-3.0*b*y*psi + r*(y-2.0*x*psi)),
-					// 			-c*b*(-3.0*b*x*psi + r*(x+2.0*y*psi))
+					// 			+c*bLocal*(-3.0*bLocal*y*psi + r*(y-2.0*x*psi)),
+					// 			-c*bLocal*(-3.0*bLocal*x*psi + r*(x+2.0*y*psi))
 					// 		);
 					// 	}
 					// }
 				case 2:	// hyperbolic R = 1/(-b psi)
-					c = (b*r*psi + 1.0) / (2.0*b*f1*r2*psi*psi);
+					c = (bLocal*r*psi + 1.0) / (2.0*bLocal*f1*r2*psi*psi);
 
 					v = vec2(
-						c*( y - b*r*y*psi + 2.0*b*r*x*psi*psi),
- 						c*(-x + b*r*x*psi + 2.0*b*r*y*psi*psi)
+						c*( y - bLocal*r*y*psi + 2.0*bLocal*r*x*psi*psi),
+ 						c*(-x + bLocal*r*x*psi + 2.0*bLocal*r*y*psi*psi)
 					);
 
 					if(azimuthalPhaseCorrection) {
-						c = calculateAPCFactor(-1.0/(b*psi)) / (2.0*b*f1*r2*psi*psi);
+						c = calculateAPCFactor(-1.0/(bLocal*psi)) / (2.0*bLocal*f1*r2*psi*psi);
 						v += vec2(
 							-y*c,
 							 x*c
@@ -1014,24 +902,24 @@ function addRaytracingSphere() {
 				
 				case 0:	// LOGARITHMIC
 				default:
-					float R = exp(b*psi);
+					float R = exp(bLocal*psi);
 					float R2 = R*R;
 					if(alvarezWindingFocusing) {
 						c = 1.0/(6.0*f1*r2*R);
 						v = vec2(
-							c*( 4.0*b*exp(3.0*b*psi)*y + 3.0*exp(2.0*b*psi)*r*(x-b*y) - r*r2*(b*y+3.0*x)),
-							c*(-4.0*b*exp(3.0*b*psi)*x + 3.0*exp(2.0*b*psi)*r*(y+b*x) + r*r2*(b*x-3.0*y))
+							c*( 4.0*bLocal*exp(3.0*bLocal*psi)*y + 3.0*exp(2.0*bLocal*psi)*r*(x-bLocal*y) - r*r2*(bLocal*y+3.0*x)),
+							c*(-4.0*bLocal*exp(3.0*bLocal*psi)*x + 3.0*exp(2.0*bLocal*psi)*r*(y+bLocal*x) + r*r2*(bLocal*x-3.0*y))
 						);
 					} else {
-						c = (exp(b*psi)-r)/(f1*r2);
+						c = (exp(bLocal*psi)-r)/(f1*r2);
 						v = vec2(
-							c*(r*x+b*exp(b*psi)*y),
-							c*(r*y-b*exp(b*psi)*x)
+							c*(r*x+bLocal*exp(bLocal*psi)*y),
+							c*(r*y-bLocal*exp(bLocal*psi)*x)
 						);
 					}
 
 					if(azimuthalPhaseCorrection) {
-						c = calculateAPCFactor(R) * b*R2 / (2.0*f1*r2);
+						c = calculateAPCFactor(R) * bLocal*R2 / (2.0*f1*r2);
 						v += vec2(
 							-y*c,
 							+x*c
@@ -1049,10 +937,11 @@ function addRaytracingSphere() {
 			void passThroughSpiralLens(
 				inout vec3 p, 
 				inout vec3 d, 
-				inout vec4 b,
+				inout vec4 br,
 				vec3 c,
 				float deltaTheta,
-				float f1
+				float f1,
+				float bLocal
 			) {
 				bool isForward;
 				propagateForwardToZPlane(p, d, c.z, isForward);
@@ -1070,7 +959,7 @@ function addRaytracingSphere() {
 						vec3 dN = d/length(d);
 						// calculate the phase gradient, which defines the change in the transverse components
 						vec2 pRotated = rotate(pixy, deltaTheta);
-						vec2 phaseGradient = rotate(calculatePhaseGradient(pRotated.x, pRotated.y, r2, f1), -deltaTheta);
+						vec2 phaseGradient = rotate(calculatePhaseGradient(pRotated.x, pRotated.y, r2, f1, bLocal), -deltaTheta);
 						// transverse components of the outgoing light-ray direction
 						vec2 dxy = dN.xy + phaseGradient;
 		
@@ -1079,7 +968,7 @@ function addRaytracingSphere() {
 						d = vec3(dxy, sign(d.z)*sqrt(1.0 - dot(dxy, dxy)));						
 
 						// lower the brightness factor, giving the light a slightly blue tinge
-						b *= vec4(0.9, 0.9, 0.99, 1);
+						br *= vec4(0.9, 0.9, 0.99, 1);
 					} 
 				}
 			}
@@ -1087,11 +976,11 @@ function addRaytracingSphere() {
 			void passThroughEquivalentLens(
 				inout vec3 p, 
 				inout vec3 d, 
-				inout vec4 b,
+				inout vec4 br,
 				vec3 c
 			) {
 				passThroughLens(
-					p, d, b,	// the ray
+					p, d, br,	// the ray
 					c,	// centreOfLens
 					radius, 
 					equivalentLensF,	// focal length
@@ -1099,7 +988,7 @@ function addRaytracingSphere() {
 				);
 
 				// lower the brightness factor, giving the light a blue tinge
-				// b *= vec4(0.9, 0.9, 0.99, 1);
+				// br *= vec4(0.9, 0.9, 0.99, 1);
 			}
 
 			// propagate the ray starting at position p and with direction d to the plane containing the background, providing that plane
@@ -1177,7 +1066,7 @@ function addRaytracingSphere() {
 						return backgroundColor;
 				}
 			}
-
+				
 			void main() {
 				// first calculate the point this pixel is focussed on
 				vec3 v = intersectionPoint - cameraPosition;	// the "pixel view direction", i.e. a vector from the centre of the camera apertuer to the point on the object the shader is currently "shading"
@@ -1198,46 +1087,47 @@ function addRaytracingSphere() {
 					d = v.z/d.z*d;
 	
 					// current brightness factor; this will multiply the colour at the end
-					vec4 b = vec4(1.0, 1.0, 1.0, 1.0);
+					vec4 br = vec4(1.0, 1.0, 1.0, 1.0);
 	
 					if(d.z < 0.0) {
 						// the ray is travelling "forwards", in the (-z) direction;
-						if(showEquivalentLens) passThroughEquivalentLens(p, d, b, vec3(c1.x, c1.y, 0)); 
+						if(showEquivalentLens) passThroughEquivalentLens(p, d, br, vec3(c1.x, c1.y, 0)); 
 						else {
-							// pass first through component 1, then component M, then component 2, then to environment-facing video feed
-							if(visible1) passThroughSpiralLens(p, d, b, c1, phi1,  f1);      // 1, f1
-							if(visibleM1) passThroughSpiralLens(p, d, b, cM1, phiM1,  f2);     // M, -0.5*f1
-							if(visibleM2) passThroughSpiralLens(p, d, b, cM2, phiM2,  f2);     // M, -0.5*f1
-							if(visible2) passThroughSpiralLens(p, d, b, c2, phi2,  f1);      // 2, f1
-						}
-						if(keepVideoFeedForward) 
-							color = getColorOfBackground(p, d, b, backgroundTexture, halfWidthBackground, halfHeightBackground, backgroundColour);
-							// color = getColorOfVideoFeed(p, d, b, videoFeedETexture, halfWidthE, halfHeightE, vec4(1, 1, 1, 1.0));
-						else color = getColorOfVideoFeed(p, d, b, -videoDistance, videoFeedETexture, halfWidthE, halfHeightE, vec4(1, 1, 1, 1.0));
+							// pass through four spiral-lens components (two SFL devices)
+										if(visible1) passThroughSpiralLens(p, d, br, c1, phi1, f1, b1);
+										if(visible2) passThroughSpiralLens(p, d, br, c2, phi2, f2, b1);
+										if(visible3) passThroughSpiralLens(p, d, br, c3, phi3, f3, b2);
+										if(visible4) passThroughSpiralLens(p, d, br, c4, phi4, f4, b2);
+								}
+								if(keepVideoFeedForward) 
+							color = getColorOfBackground(p, d, br, backgroundTexture, halfWidthBackground, halfHeightBackground, backgroundColour);
+							// color = getColorOfVideoFeed(p, d, br, videoFeedETexture, halfWidthE, halfHeightE, vec4(1, 1, 1, 1.0));
+						else color = getColorOfVideoFeed(p, d, br, -videoDistance, videoFeedETexture, halfWidthE, halfHeightE, vec4(1, 1, 1, 1.0));
 					} else {
 						// the ray is travelling "backwards", in the (+z) direction;
-						if(showEquivalentLens) passThroughEquivalentLens(p, d, b, vec3(c1.x, c1.y, 0)); 
+						if(showEquivalentLens) passThroughEquivalentLens(p, d, br, vec3(c1.x, c1.y, 0)); 
 						else {
-							// pass first through component 2, then component M, then component 1, then to user-facing video feed
-							if(visible2) passThroughSpiralLens(p, d, b, c2, phi2,  -f1);      // 2, f1
-							if(visibleM1) passThroughSpiralLens(p, d, b, cM2, phiM2,  -f2);     // M, -0.5*f1
-							if(visibleM2) passThroughSpiralLens(p, d, b, cM1, phiM1,  -f2);     // M, -0.5*f1
-							if(visible1) passThroughSpiralLens(p, d, b, c1, phi1,  -f1);      // 1, f1
-						}
-						if(keepVideoFeedForward) 
-							color = getColorOfBackground(p, d, b, backgroundTexture, halfWidthBackground, halfHeightBackground, backgroundColour);
-							// color = getColorOfVideoFeed(p, d, b, videoFeedETexture, halfWidthE, halfHeightE, vec4(1, 1, 1, 1.0));
-						else color = getColorOfVideoFeed(p, d, b, videoDistance, videoFeedUTexture, halfWidthU, halfHeightU, vec4(1, 0, 0, 1.0));
+							// pass through four spiral-lens components in reverse order
+										if(visible4) passThroughSpiralLens(p, d, br, c4, phi4, f4, b2);
+										if(visible3) passThroughSpiralLens(p, d, br, c3, phi3, f3, b2);
+										if(visible2) passThroughSpiralLens(p, d, br, c2, phi2, f2, b1);
+										if(visible1) passThroughSpiralLens(p, d, br, c1, phi1, f1, b1);
+								}
+								if(keepVideoFeedForward) 
+							color = getColorOfBackground(p, d, br, backgroundTexture, halfWidthBackground, halfHeightBackground, backgroundColour);
+							// color = getColorOfVideoFeed(p, d, br, videoFeedETexture, halfWidthE, halfHeightE, vec4(1, 1, 1, 1.0));
+						else color = getColorOfVideoFeed(p, d, br, videoDistance, videoFeedUTexture, halfWidthU, halfHeightU, vec4(1, 0, 0, 1.0));
 					}
 		
 					// finally, multiply by the brightness factor and add to gl_FragColor
-					gl_FragColor += b*color;
+					gl_FragColor += br*color;
 				}
 					
 				gl_FragColor /= float(noOfRays);
 			}
 		`
 	});
+	
 	raytracingSphere = new THREE.Mesh( geometry, raytracingSphereShaderMaterial ); 
 	scene.add( raytracingSphere );
 }
@@ -1259,8 +1149,11 @@ function createGUI() {
 		// },
 		// visible1: raytracingSphereShaderMaterial.uniforms.visible1.value,
 		// visible2: raytracingSphereShaderMaterial.uniforms.visible2.value,
-		'deltaThetaDeg1': deltaTheta1M1/ Math.PI * 180.,
-		'deltaThetaDeg2': deltaTheta2M2/ Math.PI * 180.,
+		'deltaThetaDeg': deltaTheta / Math.PI * 180.,
+		'deltaTheta2Deg': deltaTheta2 / Math.PI * 180.,
+		'deltaZGap': deltaZGap,
+		'b1': b1,
+		'b2': b2,
 		// 'Spiral type': raytracingSphereShaderMaterial.uniforms.cylindricalLensSpiralType.value,	// 0 = logarithmic, 1 = Archimedean, 2 = hyperbolic
 		spiralType: function() { 
 			raytracingSphereShaderMaterial.uniforms.cylindricalLensSpiralType.value = (raytracingSphereShaderMaterial.uniforms.cylindricalLensSpiralType.value+1) % 3;
@@ -1273,9 +1166,11 @@ function createGUI() {
 		'Radius': raytracingSphereShaderMaterial.uniforms.radius.value,	// radius of the Fresnel lens
 		yXR: yXR, 
 		qDiopterPerDegree: qAFL * (Math.PI / 180.0),	// convert to diopter per degree
+		fB: fB,
 		// '<i>f</i><sub>1</sub>': raytracingSphereShaderMaterial.uniforms.f1.value,	// focal length of cylindrical lens 1 (for Arch. spiral at r=1, for hyp. spiral at phi=1)
-		'&Delta;<i>z</i>': deltaZ,
-		'b': raytracingSphereShaderMaterial.uniforms.b.value,	// winding parameter of the spiral
+		'&Delta;<i>z</i><sub>1</sub>': deltaZ,
+		'&Delta;<i>z</i><sub>2</sub>': deltaZ2,
+		'b': b1,	// winding parameter of the spiral
 		// 'Alvarez winding focussing': raytracingSphereShaderMaterial.uniforms.alvarezWindingFocusing.value,
 		windingFocussing: function() {
 			// 0: 'None', 1: 'Alvarez', 2: 'Separation'
@@ -1283,15 +1178,19 @@ function createGUI() {
 			windingFocussingControl.name( 'Winding focussing: ' + windingFocussing2String() );
 			if(windingFocussing === 0) {
 				deltaZ = deltaZUser;
+				deltaZ2 = deltaZ2User;
 				deltaZControl.setValue(deltaZ);
+				deltaZ2Control.setValue(deltaZ2);
 			}
 			if(windingFocussing === 2) {
 				deltaZUser = deltaZ;
+				deltaZ2User = deltaZ2;
 				if((raytracingSphereShaderMaterial.uniforms.cylindricalLensSpiralType.value != 0) || (deltaTheta < 0)) {
 					postStatus('Warning: Winding focussing through separation works only for log. spirals and &Delta;&theta; > 0');
 				}
 			}
 			deltaZControl.disable(windingFocussing === 2);	
+			deltaZ2Control.disable(windingFocussing === 2);
 		},
 		azimuthalPhaseCorrection: function() {
 			azimuthalPhaseCorrection = (azimuthalPhaseCorrection + 1) % 3;
@@ -1336,12 +1235,13 @@ function createGUI() {
 		}
 	}
 
-	gui.add( GUIParams, 'deltaThetaDeg1', -180, 180, 1 )
-	.name('&Delta;&theta;1&deg;)')
-	.onChange( (a) => { deltaTheta1M1 = a/180.0*Math.PI; } );
-	gui.add( GUIParams, 'deltaThetaDeg2', -180, 180, 1 )
-	.name('&Delta;&theta;2&deg;)')
-	.onChange( (a) => { deltaTheta2M2 = a/180.0*Math.PI; } );
+	gui.add( GUIParams, 'deltaThetaDeg', -180, 180, 1 )
+	.name('&Delta;&theta; (&deg;)')
+	.onChange( (a) => { deltaTheta = a/180.0*Math.PI; } );
+
+	gui.add( GUIParams, 'deltaTheta2Deg', -180, 180, 1 )
+		.name('&Delta;&theta;<sub>2</sub> (&deg;)')
+		.onChange( (a) => { deltaTheta2 = a/180.0*Math.PI; } );
 
 	// const folderComponents = gui.addFolder( 'Optical components' );
 	showControl = gui.add( GUIParams, 'show' ).name( 'Show: ' + show2String() );
@@ -1364,19 +1264,31 @@ function createGUI() {
 	// } );
 	// spiralTypeControl.disable(true);
 	// gui.add( GUIParams, 'cycleSpiralType' ).name( 'Cycle spiral type' );
-	gui.add( GUIParams, 'b', 0.001, 
+	gui.add( GUIParams, 'b1', 0.001, 
 		0.1, 
 		0.01 )
-		.name('<i>b</i>').onChange( (b) => {raytracingSphereShaderMaterial.uniforms.b.value = b; } );
+		.name('<i>b</i><sub>1</sub>').onChange( (v) => { b1 = v; } );
+	gui.add( GUIParams, 'b2', 0.001, 
+		0.1, 
+		0.01 )
+		.name('<i>b</i><sub>2</sub>').onChange( (v) => { b2 = v; } );
 	gui.add( GUIParams, 'qDiopterPerDegree', -.1, .1, 0.001 )
 		.name( '<i>q</i> (diopter / &deg;)' )
 		.onChange( (qDiopterPerDegree) => {
 			qAFL = qDiopterPerDegree / (Math.PI / 180.0);
 		} );
+	gui.add( GUIParams, 'fB', 0.0001, 10.0, 0.0001 )
+		.name( '<i>f</i><sub>B</sub>' )
+		.onChange( (v) => { fB = Math.max(1e-6, v); } );
+
 	// gui.add( GUIParams, '<i>f</i><sub>1</sub>', -1, 
 	// 	1, 
 	// 	0.01 ).onChange( (f1) => { raytracingSphereShaderMaterial.uniforms.f1.value = f1; } );
-	deltaZControl = gui.add( GUIParams, '&Delta;<i>z</i>', deltaZMin, 0.01, 0.00001).onChange( (dz) => { deltaZ = dz; } );
+	deltaZControl = gui.add( GUIParams, '&Delta;<i>z</i><sub>1</sub>', deltaZMin, 1, 0.00001).onChange( (dz) => { deltaZ = dz; } );
+	deltaZ2Control = gui.add( GUIParams, '&Delta;<i>z</i><sub>2</sub>', deltaZMin, 1, 0.00001).onChange( (dz) => { deltaZ2 = dz; } );
+	gui.add( GUIParams, 'deltaZGap', 0.0, 0.05, 0.00001 )
+		.name('&Delta;<i>z</i><sub>gap</sub>')
+		.onChange( (dzgap) => { deltaZGap = dzgap; } );
 	windingFocussingControl = gui.add( GUIParams, 'windingFocussing' ).name( 'Winding focussing: ' + windingFocussing2String() );	// .name( 'Winding focussing' );
 	azimuthalPhaseCorrectionControl = gui.add( GUIParams, 'azimuthalPhaseCorrection' )
 	.name( 'Azim. phase corr. (APC): ' + azimuthalPhaseCorrection2String() );
@@ -1608,9 +1520,12 @@ function addXRInteractivity() {
 
 // return the focal length of the Fresnel lens
 function calculateEquivalentLensF() {
-	return 1/(qAFL*deltaTheta1M1+qAFL*deltaTheta2M2);
+	const deltaThetaTotal = deltaTheta + deltaTheta2;
+	return 1/(qAFL*deltaThetaTotal);
 }
-
+function calculateEquivalentLensF2() {
+	return 1/(qAFL*deltaTheta2);
+}
 
 function createVideoFeeds() {
 	// create the video stream for the user-facing camera first, as some devices (such as my iPad), which have both cameras,
@@ -2098,9 +2013,9 @@ function getInfoString() {
 		'Show ' + show2String() + '<br>\n' +
 		// `Show component 1 `+ (raytracingSphereShaderMaterial.uniforms.visible1.value?'&check;':'&cross;')+`<br>\n` +
 		// `Show component 2 `+ (raytracingSphereShaderMaterial.uniforms.visible2.value?'&check;':'&cross;')+`<br>\n` +
-		`Rotation angle, &Delta;&theta;1； = ${(deltaTheta1M1*180.0/Math.PI).toPrecision(4)}&deg;<br>\n` +
+		`Rotation angle, &Delta;&theta; = ${(deltaTheta*180.0/Math.PI).toPrecision(4)}&deg;<br>\n` +
 		'Spiral type = ' + cylindricalLensSpiralType2String() + '<br>\n' +
-		`Winding parameter, <i>b</i> = ${raytracingSphereShaderMaterial.uniforms.b.value.toPrecision(4)}<br>\n` +	// winding parameter of the spiral
+		`Winding parameter, <i>b</i> = ${b1.toPrecision(4)}<br>\n` +	// winding parameter of the spiral
 		`Ratio of focal power to rotation angle, <i>p</i> = ${(qAFL * (Math.PI / 180.0)).toPrecision(4)} diopter/&deg;<br>\n` +	// ratio of focal power to rotation angle
 		// `<i>f</i><sub>1</sub> = ${raytracingSphereShaderMaterial.uniforms.f1.value.toPrecision(4)}<br>\n` +	// focal length of cylindrical lens 1 (for Arch. spiral at r=1, for hyp. spiral at phi=1)
 		`&Delta;<i>z</i> = ${deltaZ.toPrecision(4)}<br>\n` +
